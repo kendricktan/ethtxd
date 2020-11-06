@@ -27,7 +27,6 @@ let
       cabal-install
       pkgs.jq
       dapptools.solc
-      dapptools.hevm
     ];
     withHoogle = true;
     shellHook = ''
