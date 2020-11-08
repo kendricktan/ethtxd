@@ -4,19 +4,25 @@
 
 module Main where
 
+import           EVM                              (FrameContext (..),
+                                                   FrameState (..), Log (..),
+                                                   TraceData (..))
 import           EVM.Dapp                         (DappInfo, dappInfo)
-import           EVM.Format                       (showTraceTree)
+import           EVM.Format                       (formatSBinary, showTraceTree)
 import           EVM.Solidity                     (SourceCache (..))
 import           EVM.Symbolic                     (forceLitBytes, len, litAddr,
                                                    w256lit)
 import           EVM.Types
 
+import           Control.Arrow                    ((>>>))
 import           Control.Lens.Combinators         (view)
 import           Control.Monad                    (void)
 import           Control.Monad.Trans.State.Strict
 import           Data.Monoid                      (mempty)
 import           Data.SBV                         (literal)
+import           Data.Text                        (Text, pack, unpack)
 import           Data.Text.IO                     (hPutStr)
+import           Data.Tree                        (Tree (..), levels)
 import           System.IO                        (stderr)
 
 import qualified EVM
@@ -99,23 +105,35 @@ vm = do
 runVM =
   execStateT (EVM.Stepper.interpret fetcher . void $ EVM.Stepper.execFully)
 
+decodeTreeTrace :: Tree EVM.Trace -> [String]
+decodeTreeTrace (Node n ns) = cur : concatMap decodeTreeTrace ns
+  where
+    cur =
+      case view EVM.traceData n of
+        EventTrace (Log _ _ _) -> "event"
+        FrameTrace (CallContext target context _ _ hash abi calldata _ _) ->
+          "call " <> show target <> " " <> (unpack $ formatSBinary calldata)
+        _ -> "unknown"
+
 main :: IO ()
 main = do
   vm' <- vm >>= runVM
-  hPutStr stderr (showTraceTree emptyDapp vm')
-  case view EVM.result vm' of
-    Nothing -> error "internal error; no EVM result"
-    Just (EVM.VMFailure (EVM.Revert msg)) -> do
-      print $ ByteStringS msg
-      print "no good"
-    Just (EVM.VMFailure err) -> do
-      print err
-      print "no good"
-    Just (EVM.VMSuccess buf) -> do
-      let msg =
-            case buf of
-              SymbolicBuffer msg' -> forceLitBytes msg'
-              ConcreteBuffer msg' -> msg'
-      print $ ByteStringS msg
-      print "we good"
+  let traces = decodeTreeTrace <$> EVM.traceForest vm'
+  print traces
+  -- hPutStr stderr (showTraceTree emptyDapp vm')
+  -- case view EVM.result vm' of
+  --   Nothing -> error "internal error; no EVM result"
+  --   Just (EVM.VMFailure (EVM.Revert msg)) -> do
+  --     print $ ByteStringS msg
+  --     print "no good"
+  --   Just (EVM.VMFailure err) -> do
+  --     print err
+  --     print "no good"
+  --   Just (EVM.VMSuccess buf) -> do
+  --     let msg =
+  --           case buf of
+  --             SymbolicBuffer msg' -> forceLitBytes msg'
+  --             ConcreteBuffer msg' -> msg'
+  --     print $ ByteStringS msg
+  --     print "we good"
   return ()
