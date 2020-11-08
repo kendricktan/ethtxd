@@ -5,17 +5,19 @@
 module Main where
 
 import           EVM.Dapp                         (DappInfo, dappInfo)
+import           EVM.Format                       (showTraceTree)
 import           EVM.Solidity                     (SourceCache (..))
 import           EVM.Symbolic                     (len, litAddr, w256lit)
 import           EVM.Types
 
-import           Control.Lens                     (set, (&))
 import           Control.Monad                    (void)
 import           Control.Monad.Trans.State.Strict
 import           Data.ByteString                  (ByteString)
-import           Data.Maybe
+
 import           Data.Monoid                      (mempty)
 import           Data.SBV                         (literal)
+import           Data.Text.IO                     (hPutStr)
+import           System.IO                        (stderr)
 
 import qualified EVM
 import qualified EVM.FeeSchedule                  as FeeSchedule
@@ -45,8 +47,7 @@ contract = EVM.Fetch.fetchContractFrom block url address
 
 calldata :: ByteString
 calldata =
-  read
-    "0x18cbafe500000000000000000000000000000000000000000000000000000000283828e300000000000000000000000000000000000000000000000014749f446f3e3b6700000000000000000000000000000000000000000000000000000000000000a00000000000000000000000007ee39071c8e207bea9ed01d27d195f3a6cc886ac000000000000000000000000000000000000000000000000000000005fa65c8e0000000000000000000000000000000000000000000000000000000000000002000000000000000000000000dac17f958d2ee523a2206206994597c13d831ec7000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
+  "0x18cbafe500000000000000000000000000000000000000000000000000000000283828e300000000000000000000000000000000000000000000000014749f446f3e3b6700000000000000000000000000000000000000000000000000000000000000a00000000000000000000000007ee39071c8e207bea9ed01d27d195f3a6cc886ac000000000000000000000000000000000000000000000000000000005fa65c8e0000000000000000000000000000000000000000000000000000000000000002000000000000000000000000dac17f958d2ee523a2206206994597c13d831ec7000000000000000000000000c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
 
 codeType = EVM.RuntimeCode
 
@@ -64,6 +65,12 @@ calldata' = ConcreteBuffer calldata
 
 address' = address
 
+miner = 0
+
+timestamp = 1604743
+
+diff = 0
+
 vm0 miner ts blockNum diff c =
   EVM.makeVm $
   EVM.VMOpts
@@ -73,13 +80,13 @@ vm0 miner ts blockNum diff c =
     , EVM.vmoptAddress = address'
     , EVM.vmoptCaller = litAddr caller'
     , EVM.vmoptOrigin = origin'
-    , EVM.vmoptGas = W256 23000000000
-    , EVM.vmoptGaslimit = W256 2000000
-    , EVM.vmoptCoinbase = 0
-    , EVM.vmoptNumber = 11209179
-    , EVM.vmoptTimestamp = w256lit $ W256 1604741
-    , EVM.vmoptBlockGaslimit = 0
-    , EVM.vmoptGasprice = W256 23000000000
+    , EVM.vmoptGas = 0xffffffffffffffff
+    , EVM.vmoptGaslimit = 0xffffffffffffffff
+    , EVM.vmoptCoinbase = miner
+    , EVM.vmoptNumber = blockNum
+    , EVM.vmoptTimestamp = ts
+    , EVM.vmoptBlockGaslimit = 1000000000000
+    , EVM.vmoptGasprice = 1
     , EVM.vmoptMaxCodeSize = 0xffffffff
     , EVM.vmoptDifficulty = diff
     , EVM.vmoptSchedule = FeeSchedule.istanbul
@@ -88,12 +95,6 @@ vm0 miner ts blockNum diff c =
     , EVM.vmoptStorageModel = EVM.ConcreteS
     }
 
-miner = 0
-
-timestamp = 1604743
-
-diff = 0
-
 vm = do
   contract' <-
     contract >>= \case
@@ -101,8 +102,11 @@ vm = do
       Just c -> return c
   return $ VMTest.initTx $ vm0 miner timestamp blockNum diff contract'
 
-runVM vm =
-  execStateT (EVM.Stepper.interpret fetcher . void $ EVM.Stepper.execFully) vm
+runVM =
+  execStateT (EVM.Stepper.interpret fetcher . void $ EVM.Stepper.execFully)
 
 main :: IO ()
-main = putStrLn "Hello, Haskell!"
+main = do
+  vm' <- vm >>= runVM
+  hPutStr stderr (showTraceTree emptyDapp vm')
+  return ()

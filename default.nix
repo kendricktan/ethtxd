@@ -14,7 +14,7 @@ let
       ethtxd =
         hself.callCabal2nix
           "ethtxd"
-          (gitignore ./src)
+          (gitignore ./.)
           {};
     };
   };
@@ -25,6 +25,10 @@ let
     ];
     buildInputs = with pkgs.haskellPackages; [
       cabal-install
+      hlint
+      ghcide
+      stylish-haskell
+      hindent
       pkgs.jq
       dapptools.solc
     ];
