@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveGeneric     #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -18,11 +19,16 @@ import           Control.Arrow                    ((>>>))
 import           Control.Lens.Combinators         (view)
 import           Control.Monad                    (void)
 import           Control.Monad.Trans.State.Strict
+import           Data.Aeson                       (FromJSON (..), ToJSON (..),
+                                                   decode, defaultOptions,
+                                                   encode, genericToEncoding)
 import           Data.Monoid                      (mempty)
 import           Data.SBV                         (literal)
 import           Data.Text                        (Text, pack, unpack)
 import           Data.Text.IO                     (hPutStr)
-import           Data.Tree                        (Tree (..), levels)
+import           Data.Tree                        (Forest (..), Tree (..),
+                                                   levels)
+import           GHC.Generics
 import           System.IO                        (stderr)
 
 import qualified EVM
@@ -30,6 +36,33 @@ import qualified EVM.FeeSchedule                  as FeeSchedule
 import qualified EVM.Fetch
 import qualified EVM.Stepper
 import qualified EVM.VMTest                       as VMTest
+import qualified Network.Wreq.Session             as Session
+
+data TxTrace = TxCall
+    { callTarget   :: Text
+    , callSigBytes :: Text
+    , callData     :: Text
+    , callTrace    :: [TxTrace]
+    }
+    | TxDelegateCall
+    { delegateCallTarget   :: Text
+    , delegateCallSigBytes :: Text
+    , delegateCallData     :: Text
+    , delegateCallTrace    :: [TxTrace]
+    }
+    | TxEvent
+    { eventBytes  :: Text
+    , eventTopics :: [Text]
+    }
+    | TxReturn
+    { returnData :: Text
+    }
+    deriving (Generic)
+
+instance ToJSON TxTrace where
+  toEncoding = genericToEncoding defaultOptions
+
+instance FromJSON TxTrace
 
 -- txhash 0x44c6f3f304a1e566c14063066f440d82eb7adbae57a3b9bcb1aec7c7dab65766
 emptyDapp :: DappInfo
@@ -105,21 +138,48 @@ vm = do
 runVM =
   execStateT (EVM.Stepper.interpret fetcher . void $ EVM.Stepper.execFully)
 
-decodeTreeTrace :: Tree EVM.Trace -> [String]
-decodeTreeTrace (Node n ns) = cur : concatMap decodeTreeTrace ns
-  where
-    cur =
-      case view EVM.traceData n of
-        EventTrace (Log _ _ _) -> "event"
-        FrameTrace (CallContext target context _ _ hash abi calldata _ _) ->
-          "call " <> show target <> " " <> (unpack $ formatSBinary calldata)
-        _ -> "unknown"
+encodeTrace :: EVM.Trace -> Maybe TxTrace
+encodeTrace t =
+  case view EVM.traceData t
+    -- Event Emitted
+        of
+    EventTrace (Log _ bytes topics) ->
+      let topics' = (map (pack . show) topics)
+          bytes' = formatSBinary bytes
+       in Just $ TxEvent bytes' topics'
+    -- Contract call
+    FrameTrace (CallContext target context _ _ _ _ calldata _ _) ->
+      let target' = pack (show target)
+          calldata' = unpack $ formatSBinary calldata
+          sig' = pack $ take 10 calldata'
+          data' = pack $ drop 10 calldata'
+       in case target == context
+        -- Call
+                of
+            True  -> Just $ TxCall target' sig' data' []
+        -- Delegate call
+            False -> Just $ TxDelegateCall target' sig' data' []
+    -- Return Data
+    ReturnTrace out (CallContext {}) -> Just $ TxReturn $ formatSBinary out
+    -- Unimportant stuff
+    _ -> Nothing
+
+encodeTree :: Tree EVM.Trace -> Tree (Maybe TxTrace)
+encodeTree (Node n ns) = (Node (encodeTrace n) (encodeTree <$> ns))
+
+formatForest :: Tree (Maybe TxTrace) -> TxTrace
+formatForest (Node Nothing _) = TxReturn "0x"
+formatForest (Node (Just n) ns) =
+  case n of
+    TxCall _ _ _ _         -> n {callTrace = formatForest <$> ns}
+    TxDelegateCall _ _ _ _ -> n {callTrace = formatForest <$> ns}
+    _                      -> n
 
 main :: IO ()
 main = do
   vm' <- vm >>= runVM
-  let traces = decodeTreeTrace <$> EVM.traceForest vm'
-  print traces
+  let traces = formatForest <$> (encodeTree <$> EVM.traceForest vm')
+  print $ encode traces
   -- hPutStr stderr (showTraceTree emptyDapp vm')
   -- case view EVM.result vm' of
   --   Nothing -> error "internal error; no EVM result"
