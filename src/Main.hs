@@ -1,6 +1,8 @@
-{-# LANGUAGE DeriveGeneric     #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE DeriveGeneric      #-}
+{-# LANGUAGE FlexibleInstances  #-}
+{-# LANGUAGE OverloadedStrings  #-}
+{-# OPTIONS_GHC -fno-cse #-}
 
 module Main where
 
@@ -9,15 +11,11 @@ import           Data.Aeson                           (FromJSON (..),
                                                        ToJSON (..),
                                                        defaultOptions,
                                                        genericToEncoding)
-import           Data.Maybe                           (fromMaybe)
-import           Data.Text                            (Text, pack, unpack)
+import           Data.Text                            (Text, pack)
 import           GHC.Generics                         (Generic (..))
 import           Network.Wai.Middleware.RequestLogger (logStdout)
-import           System.Environment                   (lookupEnv)
-import           System.Exit                          (ExitCode (ExitFailure),
-                                                       exitSuccess, exitWith)
-
-import           System.IO.Unsafe                     (unsafePerformIO)
+import           System.Console.CmdArgs               (Data, Typeable, cmdArgs,
+                                                       help, summary, (&=))
 
 import           Network.HTTP.Types.Status            (ok200, status400)
 import           Web.Scotty                           (get, json, middleware,
@@ -45,13 +43,14 @@ instance FromJSON Response
 instance ToJSON Response where
   toEncoding = genericToEncoding defaultOptions
 
-ethRpcUrl :: Text
-ethRpcUrl =
-  pack $
-  fromMaybe "http://localhost:8545" (unsafePerformIO $ lookupEnv "ETH_RPC_URL")
+data EthTxdOpts = EthTxdOpts
+    { port :: Int
+    , rpc  :: String
+    }
+    deriving (Show, Data, Typeable)
 
-getTxTrace :: Text -> IO Response
-getTxTrace txHash = do
+getTxTrace :: Text -> Text -> IO Response
+getTxTrace ethRpcUrl txHash = do
   tx <- fetchTx ethRpcUrl txHash
   case tx of
     Nothing ->
@@ -65,14 +64,24 @@ getTxTrace txHash = do
       let traces = formatForest <$> (encodeTree <$> EVM.traceForest vm')
       return $ SuccessResponse txHash traces
 
+defaultOpts =
+  EthTxdOpts
+    { port = 3000 &= help "Web server port (default: 3000)"
+    , rpc =
+        "http://localhost:8545" &=
+        help
+          "Ethereum RPC URL to retrieve remote state (default: http://localhost:8545)"
+    } &=
+  summary "ethtxd - Lightweight Ethereum Transaction Decoder API Service v0.1.0"
+
 main :: IO ()
 main = do
-  putStrLn $ "ETH_RPC_URL: " <> (unpack ethRpcUrl)
-  scotty 3000 $ do
+  ethtxdOpts <- cmdArgs defaultOpts
+  scotty (port ethtxdOpts) $ do
     middleware logStdout
     get "/tx/:txHash" $ do
       txHash <- param "txHash"
-      txTrace <- liftIO $ getTxTrace txHash
+      txTrace <- liftIO $ getTxTrace (pack $ rpc ethtxdOpts) txHash
       json txTrace
       case txTrace of
         SuccessResponse _ _ -> status ok200
