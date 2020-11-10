@@ -77,6 +77,7 @@ defaultOpts =
 main :: IO ()
 main = do
   ethtxdOpts <- cmdArgs defaultOpts
+  putStrLn $ "Ethereum RPC URL: " <> rpc ethtxdOpts
   scotty (port ethtxdOpts) $ do
     middleware logStdout
     get "/tx/:txHash" $ do
