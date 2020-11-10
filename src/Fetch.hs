@@ -20,9 +20,10 @@ data Tx = Tx
     { _blockNum  :: W256
     , _timestamp :: SymWord
     , _from      :: Addr
-    , _to        :: Addr
+    , _to        :: Maybe Addr
     , _gas       :: W256
     , _value     :: W256
+    , _nonce     :: W256
     , _input     :: ByteString
     }
     deriving (Show)
@@ -31,12 +32,13 @@ parseTx :: (AsValue s, Show s) => s -> Maybe Tx
 parseTx receipt = do
   blockNum <- readText <$> receipt ^? key "blockNumber" . _String
   from <- readText <$> receipt ^? key "from" . _String
-  to <- readText <$> receipt ^? key "to" . _String
   gas <- readText <$> receipt ^? key "gas" . _String
   value <- readText <$> receipt ^? key "value" . _String
+  nonce <- readText <$> receipt ^? key "nonce" . _String
   input <- encodeUtf8 <$> receipt ^? key "input" . _String
-  -- Tx is executed in the state at the prior block
-  return $ Tx (blockNum - 1) 0 from to gas value input
+  --
+  let to = readText <$> receipt ^? key "to" . _String
+  return $ Tx blockNum 0 from to gas value nonce input
 
 fetchTx :: Text -> Text -> IO (Maybe Tx)
 fetchTx url txhash = do

@@ -5,29 +5,28 @@
 
 module Main where
 
-import           EVM                              (FrameContext (..),
-                                                   FrameState (..), Log (..),
+import           EVM                              (FrameContext (..), Log (..),
                                                    TraceData (..))
+import           EVM.Concrete                     (createAddress)
 import           EVM.Dapp                         (DappInfo, dappInfo)
-import           EVM.Format                       (formatSBinary, showTraceTree)
+import           EVM.Format                       (formatSBinary, showError)
 import           EVM.Solidity                     (SourceCache (..))
 import           EVM.Symbolic                     (forceLitBytes, len, litAddr,
                                                    w256lit)
 import           EVM.Types
 
-import           Control.Arrow                    ((>>>))
 import           Control.Lens.Combinators         (view)
 import           Control.Monad                    (void)
 import           Control.Monad.Trans.State.Strict
 import           Data.Aeson                       (FromJSON (..), ToJSON (..),
-                                                   decode, defaultOptions,
-                                                   encode, genericToEncoding)
+                                                   defaultOptions, encode,
+                                                   genericToEncoding)
+import           Data.Maybe
 import           Data.Monoid                      (mempty)
 import           Data.SBV                         (literal)
 import           Data.Text                        (Text, pack, unpack)
 import           Data.Text.IO                     (hPutStr)
-import           Data.Tree                        (Forest (..), Tree (..),
-                                                   levels)
+import           Data.Tree                        (Tree (..))
 import           Fetch
 import           GHC.Generics
 import           System.IO                        (stderr)
@@ -37,7 +36,6 @@ import qualified EVM.FeeSchedule                  as FeeSchedule
 import qualified EVM.Fetch
 import qualified EVM.Stepper
 import qualified EVM.VMTest                       as VMTest
-import qualified Network.Wreq.Session             as Session
 
 data TxTrace = TxCall
     { callTarget   :: Text
@@ -58,6 +56,9 @@ data TxTrace = TxCall
     | TxReturn
     { returnData :: Text
     }
+    | TxRevert
+    { revertReason :: Text
+    }
     deriving (Generic)
 
 instance ToJSON TxTrace where
@@ -65,31 +66,29 @@ instance ToJSON TxTrace where
 
 instance FromJSON TxTrace
 
-txhash = "0x44c6f3f304a1e566c14063066f440d82eb7adbae57a3b9bcb1aec7c7dab65766"
-
-emptyDapp :: DappInfo
-emptyDapp = dappInfo "" mempty (SourceCache mempty mempty mempty mempty)
+txhash = "0x2404923060a6ecc2e415b3aef037930219d7f669f9cd76b69b78187d323ce60a"
 
 url = "http://localhost:8545"
 
-codeType = EVM.RuntimeCode
-
 decipher = hexByteString "bytes" . strip0x
 
--- value = 0
-miner = 0
-
--- timestamp = 1604743
-diff = 0
-
 vmFromTx :: Tx -> IO (EVM.VM)
-vmFromTx (Tx blockNum timestamp from to gas value input) = do
+vmFromTx (Tx blockNum timestamp from to gas value nonce input) = do
+  let toAddr = fromMaybe (createAddress from nonce) to
+      isCreate = isNothing to
+      calldata = ConcreteBuffer $ decipher input
+  -- Contract we're interacting with
   contract <-
-    EVM.Fetch.fetchContractFrom (EVM.Fetch.BlockNumber blockNum) url to >>= \case
-      Nothing -> error $ "No contract found at " <> show to
-      Just c -> return c
-  calldata <- return $ ConcreteBuffer $ decipher input
-
+    case isCreate
+      -- Creating new contract
+          of
+      True -> return $ EVM.initialContract (EVM.InitCode $ decipher input)
+      -- Not creating new contract, fetch it from external source
+      False ->
+        EVM.Fetch.fetchContractFrom (EVM.Fetch.BlockNumber blockNum) url toAddr >>= \case
+          Nothing -> error $ "No contract found at " <> show to
+          Just c -> return c
+  -- Return initialized VM
   return $
     VMTest.initTx $
     EVM.makeVm $
@@ -97,28 +96,27 @@ vmFromTx (Tx blockNum timestamp from to gas value input) = do
       { EVM.vmoptContract = contract
       , EVM.vmoptCalldata = (calldata, literal . num $ len calldata)
       , EVM.vmoptValue = w256lit value
-      , EVM.vmoptAddress = to
+      , EVM.vmoptAddress = toAddr
       , EVM.vmoptCaller = litAddr from
       , EVM.vmoptOrigin = 0
       , EVM.vmoptGas = gas
       , EVM.vmoptGaslimit = 0xffffffff
-      , EVM.vmoptCoinbase = miner
+      , EVM.vmoptCoinbase = 0
       , EVM.vmoptNumber = blockNum
       , EVM.vmoptTimestamp = timestamp
       , EVM.vmoptBlockGaslimit = 0
       , EVM.vmoptGasprice = 0
       , EVM.vmoptMaxCodeSize = 0xffffffff
-      , EVM.vmoptDifficulty = diff
+      , EVM.vmoptDifficulty = 0
       , EVM.vmoptSchedule = FeeSchedule.istanbul
       , EVM.vmoptChainId = 1
-      , EVM.vmoptCreate = False
+      , EVM.vmoptCreate = isCreate
       , EVM.vmoptStorageModel = EVM.ConcreteS
       }
 
 runVM :: Tx -> EVM.VM -> IO EVM.VM
-runVM (Tx blockNum _ _ _ _ _ _) =
-  let block = EVM.Fetch.BlockNumber blockNum
-      fetcher = EVM.Fetch.http block url
+runVM (Tx blockNum _ _ _ _ _ _ _) =
+  let fetcher = EVM.Fetch.http (EVM.Fetch.BlockNumber $ blockNum - 1) url
    in execStateT (EVM.Stepper.interpret fetcher . void $ EVM.Stepper.execFully)
 
 encodeTrace :: EVM.Trace -> Maybe TxTrace
@@ -139,11 +137,16 @@ encodeTrace t =
        in case target == context
         -- Call
                 of
-            True  -> Just $ TxCall target' sig' data' []
+            True  -> return $ TxCall target' sig' data' []
         -- Delegate call
-            False -> Just $ TxDelegateCall target' sig' data' []
+            False -> return $ TxDelegateCall target' sig' data' []
     -- Return Data
     ReturnTrace out (CallContext {}) -> Just $ TxReturn $ formatSBinary out
+    -- Revert
+    ErrorTrace e ->
+      case e of
+        EVM.Revert out -> return $ TxRevert (showError out)
+        _              -> return $ TxReturn (pack . show $ e)
     -- Unimportant stuff
     _ -> Nothing
 
@@ -155,7 +158,7 @@ formatForest (Node Nothing _) = TxReturn "0x"
 formatForest (Node (Just n) ns) =
   case n of
     TxCall _ _ _ _         -> n {callTrace = formatForest <$> ns}
-    TxDelegateCall _ _ _ _ -> n {callTrace = formatForest <$> ns}
+    TxDelegateCall _ _ _ _ -> n {delegateCallTrace = formatForest <$> ns}
     _                      -> n
 
 main :: IO ()
@@ -168,17 +171,6 @@ main = do
       Just tx' -> return tx'
   vm <- vmFromTx tx'
   vm' <- runVM tx' vm
-  -- let traces = formatForest <$> (encodeTree <$> EVM.traceForest vm')
-  -- print $ encode traces
-  hPutStr stderr (showTraceTree emptyDapp vm')
-  case view EVM.result vm' of
-    Nothing -> error "internal error; no EVM result"
-    Just (EVM.VMFailure (EVM.Revert msg)) -> print $ ByteStringS msg
-    Just (EVM.VMFailure err) -> print err
-    Just (EVM.VMSuccess buf) -> do
-      let msg =
-            case buf of
-              SymbolicBuffer msg' -> forceLitBytes msg'
-              ConcreteBuffer msg' -> msg'
-      print $ ByteStringS msg
+  let traces = formatForest <$> (encodeTree <$> EVM.traceForest vm')
+  print $ encode traces
   return ()

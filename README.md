@@ -1,5 +1,8 @@
 # ethtxd
-Ethereum Tx Decoder
+Headless Ethereum Tx Decoder
+
+
+## Usage
 
 
 ## Development
