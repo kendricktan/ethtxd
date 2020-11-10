@@ -30,7 +30,6 @@ let
       stylish-haskell
       hindent
       pkgs.jq
-      dapptools.solc
     ];
     withHoogle = true;
     shellHook = ''
