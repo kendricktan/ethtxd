@@ -1,0 +1,24 @@
+# This is a basic workflow to help you get started with Actions
+
+name: build
+
+# Controls when the action will run. Triggers the workflow on push or pull request
+# events but only for the main branch
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: cachix/install-nix-action@63cf434de4e4292c6960639d56c5dd550e789d77
+        with:
+          skip_adding_nixpkgs_channel: false
+      - name: install
+        run: sudo apt-get install -y build-essential make
+      - name: build
+        run: make build
