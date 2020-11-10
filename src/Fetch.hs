@@ -2,11 +2,11 @@
 
 module Fetch where
 
-import           Control.Lens         hiding ((.=))
+import           Control.Lens         ((^?))
 import           Data.Aeson           (Value (..))
 import           Data.Aeson.Lens      (AsValue, key, _String)
 import           Data.ByteString      (ByteString)
-import           Data.Text            (Text (..), pack)
+import           Data.Text            (Text (..))
 import           Data.Text.Encoding   (encodeUtf8)
 import           EVM.Fetch            (BlockNumber (..), fetchBlockFrom,
                                        fetchWithSession, readText, rpc)
