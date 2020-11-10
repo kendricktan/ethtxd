@@ -6,6 +6,7 @@
 
 module Main where
 
+import           Control.Exception
 import           Control.Monad.IO.Class               (liftIO)
 import           Data.Aeson                           (FromJSON (..),
                                                        ToJSON (..),
@@ -13,11 +14,10 @@ import           Data.Aeson                           (FromJSON (..),
                                                        genericToEncoding)
 import           Data.Text                            (Text, pack)
 import           GHC.Generics                         (Generic (..))
+import           Network.HTTP.Types.Status            (ok200, status400)
 import           Network.Wai.Middleware.RequestLogger (logStdout)
 import           System.Console.CmdArgs               (Data, Typeable, cmdArgs,
                                                        help, summary, (&=))
-
-import           Network.HTTP.Types.Status            (ok200, status400)
 import           Web.Scotty                           (get, json, middleware,
                                                        param, scotty, status)
 
@@ -74,6 +74,10 @@ defaultOpts =
     } &=
   summary "ethtxd - Lightweight Ethereum Transaction Decoder API Service v0.1.0"
 
+rpcExceptionHandler :: Text -> SomeException -> IO Response
+rpcExceptionHandler txHash _ =
+  return $ ErrorResponse txHash "Unable to connect to RPC Node"
+
 main :: IO ()
 main = do
   ethtxdOpts <- cmdArgs defaultOpts
@@ -82,7 +86,10 @@ main = do
     middleware logStdout
     get "/tx/:txHash" $ do
       txHash <- param "txHash"
-      txTrace <- liftIO $ getTxTrace (pack $ rpc ethtxdOpts) txHash
+      txTrace <-
+        liftIO $
+        (getTxTrace (pack $ rpc ethtxdOpts) txHash) `catch`
+        rpcExceptionHandler txHash
       json txTrace
       case txTrace of
         SuccessResponse _ _ -> status ok200
