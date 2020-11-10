@@ -37,7 +37,7 @@ Note that you can compose this tool with [4byte.directory](https://www.4byte.dir
       "tag": "TxCall",
       "callTarget": "0x95c4b6c7cff608c0ca048df8b81a484aa377172b",
       "callSigBytes": "0xa9059cbb",
-      "callData": "0000000000000000000000009389e143dff86096766cd9ff82198857745a8d7b00000000000000000000000000000000000000000000000863a750c3291ed23b",
+      "callData": "0x0000000000000000000000009389e143dff86096766cd9ff82198857745a8d7b00000000000000000000000000000000000000000000000863a750c3291ed23b",
       "callTrace": [
         {
           "tag": "TxEvent",
