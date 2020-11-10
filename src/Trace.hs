@@ -25,6 +25,8 @@ import           Data.Tree                        (Tree (..))
 import           Fetch                            (Tx (..))
 import           GHC.Generics                     (Generic)
 
+import qualified Data.Text                        as T
+
 import qualified EVM
 import qualified EVM.FeeSchedule                  as FeeSchedule
 import qualified EVM.Fetch
@@ -124,12 +126,16 @@ encodeTrace t =
           calldata' = unpack $ formatSBinary calldata
           sig' = pack $ take 10 calldata'
           data' = pack $ drop 10 calldata'
+          data'' =
+            if T.length data' > 0
+              then "0x" <> data'
+              else data'
        in case target == context
         -- Call
                 of
-            True  -> return $ TxCall target' sig' data' []
+            True  -> return $ TxCall target' sig' data'' []
         -- Delegate call
-            False -> return $ TxDelegateCall target' sig' data' []
+            False -> return $ TxDelegateCall target' sig' data'' []
     -- Return Data
     ReturnTrace out (CallContext {}) -> Just $ TxReturn $ formatSBinary out
     -- Revert
