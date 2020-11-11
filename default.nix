@@ -13,16 +13,16 @@ let
       sbv = dapptools.haskellPackages.sbv;
       ethtxd = let ethtxd = hsuper.callCabal2nix "ethtxd" (gitignore ./.) { };
       in pkgs.haskell.lib.overrideCabal ethtxd (super: {
-        enableSharedExecutables = false;
-        enableSharedLibraries = false;
+        # enableSharedExecutables = false;
+        # enableSharedLibraries = false;
         configureFlags = [
-          "--ghc-option=-optl=-threaded"
-          "--ghc-option=-optl=-static"
-          "--ghc-option=-optl=-L${
-            pkgs.gmp6.override { withStatic = true; }
-          }/lib"
-          "--ghc-option=-optl=-L${pkgs.zlib.static}/lib"
-          "--ghc-option=-optl=-L${pkgs.glibc.static}/lib"
+          "--ghc-option=-optl=-pthread"
+          # "--ghc-option=-optl=-static"
+          # "--ghc-option=-optl=-L${
+          #   pkgs.gmp6.override { withStatic = true; }
+          # }/lib"
+          # "--ghc-option=-optl=-L${pkgs.zlib.static}/lib"
+          # "--ghc-option=-optl=-L${pkgs.glibc.static}/lib"
         ];
       });
     };
@@ -37,9 +37,6 @@ let
       stylish-haskell
       hindent
       pkgs.jq
-      pkgs.gmp6
-      pkgs.zlib
-      pkgs.glibc
     ];
     withHoogle = true;
     shellHook = ''
