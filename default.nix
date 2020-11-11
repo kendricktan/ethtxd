@@ -2,8 +2,8 @@
 
 let
   sources = import ./nix/sources.nix;
-  pkgs = import sources.nixpkgs {};
-  dapptools = import sources.dapptools {};
+  pkgs = import sources.nixpkgs { };
+  dapptools = import sources.dapptools { };
 
   gitignore = pkgs.nix-gitignore.gitignoreSourcePure [ ./.gitignore ];
 
@@ -11,18 +11,25 @@ let
     overrides = hself: hsuper: {
       hevm = dapptools.haskellPackages.hevm;
       sbv = dapptools.haskellPackages.sbv;
-      ethtxd =
-        hself.callCabal2nix
-          "ethtxd"
-          (gitignore ./.)
-          {};
+      ethtxd = let ethtxd = hsuper.callCabal2nix "ethtxd" (gitignore ./.) { };
+      in pkgs.haskell.lib.overrideCabal ethtxd (super: {
+        enableSharedExecutables = false;
+        enableSharedLibraries = false;
+        configureFlags = [
+          "--ghc-option=-optl=-threaded"
+          "--ghc-option=-optl=-static"
+          "--ghc-option=-optl=-L${
+            pkgs.gmp6.override { withStatic = true; }
+          }/lib"
+          "--ghc-option=-optl=-L${pkgs.zlib.static}/lib"
+          "--ghc-option=-optl=-L${pkgs.glibc.static}/lib"
+        ];
+      });
     };
   };
 
   shell = myHaskellPackages.shellFor {
-    packages = p: [
-      p.ethtxd
-    ];
+    packages = p: [ p.ethtxd ];
     buildInputs = with pkgs.haskellPackages; [
       cabal-install
       hlint
@@ -30,6 +37,9 @@ let
       stylish-haskell
       hindent
       pkgs.jq
+      pkgs.gmp6
+      pkgs.zlib
+      pkgs.glibc
     ];
     withHoogle = true;
     shellHook = ''
@@ -38,8 +48,7 @@ let
   };
 
   exe = pkgs.haskell.lib.justStaticExecutables (myHaskellPackages.ethtxd);
-in
-{
+in {
   inherit shell;
   inherit exe;
   inherit myHaskellPackages;
