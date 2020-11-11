@@ -84,6 +84,7 @@ main = do
   putStrLn $ "Ethereum RPC URL: " <> rpc ethtxdOpts
   scotty (port ethtxdOpts) $ do
     middleware logStdout
+    get "/" $ status ok200
     get "/tx/:txHash" $ do
       txHash <- param "txHash"
       txTrace <-

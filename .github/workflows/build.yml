@@ -24,6 +24,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v2
+      - name: load nix cache
+        uses: actions/cache@v2
+        with:
+          key: ${{ runner.os }}-modules-${{ hashFiles('**/ethtxd.cabal')}}
+          path: /nix
       - uses: cachix/install-nix-action@v12
       - name: cachix
         run: nix-env -iA cachix -f https://cachix.org/api/v1/install
