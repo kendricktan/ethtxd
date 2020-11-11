@@ -24,21 +24,27 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v2
+
       - name: load nix cache
         uses: actions/cache@v2
         with:
           key: ${{ runner.os }}-modules-${{ hashFiles('**/ethtxd.cabal')}}
           path: /nix
+
       - uses: cachix/install-nix-action@v12
+
       - name: cachix
         run: nix-env -iA cachix -f https://cachix.org/api/v1/install
-      - name: cachix
+
+      - name: use dapp cachix
         run: cachix use dapp
-      - name: install cache
+
       - name: install
         run: sudo apt-get install -y build-essential make
+
       - name: build
         run: make build
+        
       - name: Upload Artifact
         uses: actions/upload-artifact@v2.2.0
         with:
