@@ -14,4 +14,6 @@ COPY shell-bin.nix /ethtxd
 
 RUN cd /ethtxd && nix-shell shell-bin.nix
 
-CMD [ "/bin/sh", "-c", "cd /ethtxd && nix-shell shell-bin.nix --command '/usr/bin/ethtxd'" ]
+EXPOSE 3000
+
+CMD [ "/bin/sh", "-c", "cd /ethtxd && nix-shell shell-bin.nix --run '/usr/bin/ethtxd' --pure" ]
