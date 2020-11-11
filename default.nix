@@ -2,6 +2,7 @@
 
 let
   sources = import ./nix/sources.nix;
+
   pkgs = import sources.nixpkgs { };
   dapptools = import sources.dapptools { };
 
@@ -11,20 +12,7 @@ let
     overrides = hself: hsuper: {
       hevm = dapptools.haskellPackages.hevm;
       sbv = dapptools.haskellPackages.sbv;
-      ethtxd = let ethtxd = hsuper.callCabal2nix "ethtxd" (gitignore ./.) { };
-      in pkgs.haskell.lib.overrideCabal ethtxd (super: {
-        # enableSharedExecutables = false;
-        # enableSharedLibraries = false;
-        configureFlags = [
-          "--ghc-option=-optl=-pthread"
-          # "--ghc-option=-optl=-static"
-          # "--ghc-option=-optl=-L${
-          #   pkgs.gmp6.override { withStatic = true; }
-          # }/lib"
-          # "--ghc-option=-optl=-L${pkgs.zlib.static}/lib"
-          # "--ghc-option=-optl=-L${pkgs.glibc.static}/lib"
-        ];
-      });
+      ethtxd = hsuper.callCabal2nix "ethtxd" (gitignore ./.) { };
     };
   };
 
@@ -37,6 +25,11 @@ let
       stylish-haskell
       hindent
       pkgs.jq
+      pkgs.zlib
+      pkgs.glibc
+      pkgs.gmp6
+      pkgs.libffi
+      pkgs.secp256k1
     ];
     withHoogle = true;
     shellHook = ''

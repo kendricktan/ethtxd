@@ -9,3 +9,4 @@ repl: .configured
 	nix-shell --command 'cabal v2-repl' --pure
 tests: .configured
 	nix-shell --command 'cabal v2-test' --pure
+	

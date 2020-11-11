@@ -72,7 +72,12 @@ Note that you can compose this tool with [4byte.directory](https://www.4byte.dir
 # Install Nix
 sh <(curl -L https://nixos.org/nix/install) --daemon
 
-make build
+nix-env -iA cachix -f https://cachix.org/api/v1/install
+
+cachix use dapp
+cachix use ethtxd
+
+make release
 ```
 
 ## Development

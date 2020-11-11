@@ -14,28 +14,21 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [ ubuntu-latest, macos-latest ]
+        os: [ ubuntu-latest ]
         # we need this to map platform names as used by github to
         # the attribute names defined in release.nix
         include:
           - os: ubuntu-latest
             os_attr: linux
-          - os: macos-latest
-            os_attr: darwin
       fail-fast: false
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v2
-      - uses: cachix/install-nix-action@63cf434de4e4292c6960639d56c5dd550e789d77
-        with:
-          skip_adding_nixpkgs_channel: false
-      - uses: actions/cache@v2
-        with:
-          path: |
-            /nix
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.cabal*') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
+      - uses: cachix/install-nix-action@v12
+      - name: cachix
+        run: nix-env -iA cachix -f https://cachix.org/api/v1/install
+      - name: install cache
+        run: cachix install dapp ethtxd
       - name: install
         run: sudo apt-get install -y build-essential make
       - name: build
