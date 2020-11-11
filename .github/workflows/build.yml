@@ -32,8 +32,9 @@ jobs:
       - uses: cachix/install-nix-action@v12
       - name: cachix
         run: nix-env -iA cachix -f https://cachix.org/api/v1/install
+      - name: cachix
+        run: cachix use dapp
       - name: install cache
-        run: cachix install dapp ethtxd
       - name: install
         run: sudo apt-get install -y build-essential make
       - name: build
