@@ -6,12 +6,13 @@
 
 module Main where
 
-import           Control.Exception
+import           Control.Exception                    (SomeException, catch)
 import           Control.Monad.IO.Class               (liftIO)
 import           Data.Aeson                           (FromJSON (..),
                                                        ToJSON (..),
                                                        defaultOptions,
-                                                       genericToEncoding)
+                                                       genericToEncoding,
+                                                       object, (.=))
 import           Data.Text                            (Text, pack)
 import           GHC.Generics                         (Generic (..))
 import           Network.HTTP.Types.Status            (ok200, status400)
@@ -84,7 +85,9 @@ main = do
   putStrLn $ "Ethereum RPC URL: " <> rpc ethtxdOpts
   scotty (port ethtxdOpts) $ do
     middleware logStdout
-    get "/" $ status ok200
+    get "/" $ do
+      json $ object [("status" :: Text) .= ("ok" :: Text)]
+      status ok200
     get "/tx/:txHash" $ do
       txHash <- param "txHash"
       txTrace <-
