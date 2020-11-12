@@ -1,4 +1,8 @@
 # ethtxd
+
+![build](https://github.com/kendricktan/ethtxd/workflows/build/badge.svg)
+![GitHub tag (latest SemVer pre-release)](https://img.shields.io/github/v/tag/kendricktan/ethtxd?include_prereleases)
+
 Lightweight Ethereum Tx Decoder with a built in REST API.
 
 ## Whats this?
