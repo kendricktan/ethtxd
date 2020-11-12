@@ -77,7 +77,7 @@ defaultOpts =
 
 rpcExceptionHandler :: Text -> SomeException -> IO Response
 rpcExceptionHandler txHash _ =
-  return $ ErrorResponse txHash "Unable to connect to RPC Node"
+  return $ ErrorResponse txHash "Unable to connect to RPC Node or state is stale (might need archival node)."
 
 main :: IO ()
 main = do
