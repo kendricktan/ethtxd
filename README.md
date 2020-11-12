@@ -7,15 +7,18 @@ Lightweight Ethereum Tx Decoder with a built in REST API.
 
 ## Whats this?
 
-A simple tool with an API to extract out Ethereum call traces
+A simple tool with an API to extract out Ethereum call traces.
 
-## Install
+## Install from Source
+
+Unfortunately due to some low-level functions in glibc, this can't be compiled into a static binary. It requires to be built from source for the time being.
 
 ```bash
+sh <(curl -L https://nixos.org/nix/install) --daemon
+
 make build
 
-# Replace with
-cp dist-newstyle/build/x86_64-linux/ghc-<version>/ethtxd-<version>/x/ethtxd/build/ethtxd/ethtxd ~/.local/bin/ethtxd
+cp dist-newstyle/<...>/ethtxd ~/.local/bin/ethtxd
 ```
 
 ## Usage
@@ -76,12 +79,13 @@ Note that you can compose this tool with [4byte.directory](https://www.4byte.dir
 # Install Nix
 sh <(curl -L https://nixos.org/nix/install) --daemon
 
+# Get Cachix
 nix-env -iA cachix -f https://cachix.org/api/v1/install
 
+# Use cachis
 cachix use dapp
-cachix use ethtxd
 
-make release
+make build
 ```
 
 ## Development
