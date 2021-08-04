@@ -73,7 +73,7 @@ defaultOpts =
         help
           "Ethereum RPC URL to retrieve remote state (default: http://localhost:8545)"
     } &=
-  summary "ethtxd - Lightweight Ethereum Transaction Decoder API Service v0.1.1"
+  summary "ethtxd - Lightweight Ethereum Transaction Decoder API Service v0.1.2"
 
 rpcExceptionHandler :: Text -> SomeException -> IO Response
 rpcExceptionHandler txHash _ =

@@ -47,7 +47,9 @@ fetchTx url txhash = do
     fetchWithSession url sess (rpc "eth_getTransactionByHash" [String txhash])
   case tx >>= parseTx of
     Just tx' -> do
-      block <- fetchBlockFrom (BlockNumber $ _blockNum tx') url
+      -- Want previous block state not current block state
+      let prevBlockNum = (toInteger $ _blockNum tx') - 1
+      block <- fetchBlockFrom (BlockNumber $ fromInteger prevBlockNum) url
       case block of
         Just block' -> return $ Just $ tx' {_timestamp = EVM._timestamp block'}
         Nothing -> return Nothing
