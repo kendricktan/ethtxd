@@ -14,8 +14,9 @@ import           EVM.Format                       (formatSBinary, showError)
 import           EVM.Symbolic                     (len, litAddr, litWord)
 import           EVM.Transaction                  (txAccessMap)
 import           EVM.Types                        (Buffer (ConcreteBuffer),
-                                                   hexByteString, num, strip0x,
-                                                   w256lit)
+                                                   SymWord (..), hexByteString,
+                                                   num, strip0x, w256lit)
+import           Numeric                          (showHex)
 
 import           Control.Lens.Combinators         (view)
 import           Control.Monad                    (void)
@@ -24,7 +25,7 @@ import           Data.Aeson                       (FromJSON (..), ToJSON (..),
                                                    defaultOptions,
                                                    genericToEncoding)
 import           Data.Maybe                       (fromMaybe, isNothing)
-import           Data.SBV                         (literal)
+import           Data.SBV                         (literal, unliteral)
 import           Data.Text                        (Text, pack, unpack)
 import           Data.Tree                        (Tree (..))
 import           Fetch                            (Tx (..))
@@ -38,17 +39,17 @@ import qualified EVM.Fetch
 import qualified EVM.Stepper
 import qualified EVM.VMTest                       as VMTest
 
-data TraceData = TxCall
+data TxTrace = TxCall
     { callTarget   :: Text
     , callSigBytes :: Text
     , callData     :: Text
-    , callTrace    :: [TraceData]
+    , callTrace    :: [TxTrace]
     }
     | TxDelegateCall
     { delegateCallTarget   :: Text
     , delegateCallSigBytes :: Text
     , delegateCallData     :: Text
-    , delegateCallTrace    :: [TraceData]
+    , delegateCallTrace    :: [TxTrace]
     }
     | TxEvent
     { eventBytes  :: Text
@@ -62,12 +63,19 @@ data TraceData = TxCall
     }
     deriving (Generic)
 
-instance ToJSON TraceData where
+instance ToJSON TxTrace where
   toEncoding = genericToEncoding defaultOptions
 
-instance FromJSON TraceData
+instance FromJSON TxTrace
 
 decipher = hexByteString "bytes" . strip0x
+
+-- | Symbolic words of 256 bits, don't show the
+--   "insightful" information
+showEvalSymWord :: SymWord -> String
+showEvalSymWord (S _ s) = case unliteral s of
+  Just x  -> ("0x" ++) $ showHex x ""
+  Nothing -> "0x"
 
 vmFromTx :: Text -> Tx -> IO (EVM.VM)
 vmFromTx url (Tx blockNum timestamp from to gas value nonce input) = do
@@ -118,13 +126,13 @@ runVM url (Tx blockNum _ _ _ _ _ _ _) =
   let fetcher = EVM.Fetch.http (EVM.Fetch.BlockNumber $ blockNum) url
    in execStateT (EVM.Stepper.interpret fetcher . void $ EVM.Stepper.execFully)
 
-encodeTrace :: EVM.Trace -> Maybe TraceData
+encodeTrace :: EVM.Trace -> Maybe TxTrace
 encodeTrace t =
   case view EVM.traceData t
     -- Event Emitted
         of
     EventTrace (Log _ bytes topics) ->
-      let topics' = (map (pack . show) topics)
+      let topics' = (map (pack . showEvalSymWord) topics)
           bytes' = formatSBinary bytes
        in Just $ TxEvent bytes' topics'
     -- Contract call
@@ -155,10 +163,10 @@ encodeTrace t =
     -- Unimportant stuff
     _ -> Nothing
 
-encodeTree :: Tree EVM.Trace -> Tree (Maybe TraceData)
+encodeTree :: Tree EVM.Trace -> Tree (Maybe TxTrace)
 encodeTree (Node n ns) = (Node (encodeTrace n) (encodeTree <$> ns))
 
-formatForest :: Tree (Maybe TraceData) -> TraceData
+formatForest :: Tree (Maybe TxTrace) -> TxTrace
 formatForest (Node Nothing _) = TxReturn "0x"
 formatForest (Node (Just n) ns) =
   case n of

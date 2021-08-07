@@ -23,7 +23,7 @@ import           Web.Scotty                           (get, json, middleware,
                                                        param, scotty, status)
 
 import           Fetch                                (Tx (..), fetchTx)
-import           Trace                                (TraceData, encodeTree,
+import           Trace                                (TxTrace, encodeTree,
                                                        formatForest, runVM,
                                                        vmFromTx)
 
@@ -31,7 +31,7 @@ import qualified EVM
 
 data Response = SuccessResponse
     { txHash :: Text
-    , traces :: [TraceData]
+    , traces :: [TxTrace]
     }
     | ErrorResponse
     { txHash :: Text
@@ -50,8 +50,8 @@ data EthTxdOpts = EthTxdOpts
     }
     deriving (Show, Data, Typeable)
 
-getTraceData :: Text -> Text -> IO Response
-getTraceData ethRpcUrl txHash = do
+getTxTrace :: Text -> Text -> IO Response
+getTxTrace ethRpcUrl txHash = do
   tx <- fetchTx ethRpcUrl txHash
   case tx of
     Nothing ->
@@ -62,8 +62,11 @@ getTraceData ethRpcUrl txHash = do
     Just tx' -> do
       -- Get state from previous block
       let tx'' = tx' { _blockNum = (_blockNum tx') - 1 }
+      -- Prepare the VM
       vm <- vmFromTx ethRpcUrl tx''
+      -- Run the transaction 
       vm' <- runVM ethRpcUrl tx'' vm
+      -- Get the traces
       let traces = formatForest <$> (encodeTree <$> EVM.traceForest vm')
       return $ SuccessResponse txHash traces
 
@@ -92,11 +95,11 @@ main = do
       status ok200
     get "/tx/:txHash" $ do
       txHash <- param "txHash"
-      TraceData <-
+      trace <-
         liftIO $
-        (getTraceData (pack $ rpc ethtxdOpts) txHash) `catch`
+        (getTxTrace (pack $ rpc ethtxdOpts) txHash) `catch`
         rpcExceptionHandler txHash
-      json TraceData
-      case TraceData of
+      json trace
+      case trace of
         SuccessResponse _ _ -> status ok200
         ErrorResponse _ _   -> status status400
