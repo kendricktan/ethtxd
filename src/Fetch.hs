@@ -10,8 +10,7 @@ import           Data.Text            (Text (..))
 import           Data.Text.Encoding   (encodeUtf8)
 import           EVM.Fetch            (BlockNumber (..), fetchBlockFrom,
                                        fetchWithSession, readText, rpc)
-import           EVM.Symbolic         (SymWord)
-import           EVM.Types            (Addr, W256)
+import           EVM.Types            (Addr, SymWord, W256)
 
 import qualified EVM                  as EVM
 import qualified Network.Wreq.Session as Session
@@ -48,9 +47,9 @@ fetchTx url txhash = do
   case tx >>= parseTx of
     Just tx' -> do
       -- Want previous block state not current block state
-      let prevBlockNum = (toInteger $ _blockNum tx') - 1
-      block <- fetchBlockFrom (BlockNumber $ fromInteger prevBlockNum) url
+      let prevBlockNum = fromInteger $ (toInteger $ _blockNum tx') - 1
+      block <- fetchBlockFrom (BlockNumber prevBlockNum) url
       case block of
-        Just block' -> return $ Just $ tx' {_timestamp = EVM._timestamp block'}
+        Just block' -> return $ Just $ tx' {_timestamp = EVM._timestamp block', _blockNum = prevBlockNum}
         Nothing -> return Nothing
     Nothing -> return Nothing

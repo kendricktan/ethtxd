@@ -8,7 +8,6 @@ let
     packages = p: [ ];
     buildInputs = [
       pkgs.zlib
-      pkgs.glibc
       pkgs.gmp
       pkgs.gmp6
       pkgs.libffcall

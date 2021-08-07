@@ -1,16 +1,21 @@
 {-# LANGUAGE DeriveGeneric     #-}
+{-# LANGUAGE ImplicitParams    #-}
 {-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE Rank2Types        #-}
 
 module Trace where
 
 import           EVM                              (FrameContext (..), Log (..),
                                                    TraceData (..))
 import           EVM.Concrete                     (createAddress)
+import           EVM.Dapp                         (DappContext (..), emptyDapp)
 import           EVM.Format                       (formatSBinary, showError)
-import           EVM.Symbolic                     (len, litAddr, w256lit)
+import           EVM.Symbolic                     (len, litAddr, litWord)
+import           EVM.Transaction                  (txAccessMap)
 import           EVM.Types                        (Buffer (ConcreteBuffer),
-                                                   hexByteString, num, strip0x)
+                                                   hexByteString, num, strip0x,
+                                                   w256lit)
 
 import           Control.Lens.Combinators         (view)
 import           Control.Monad                    (void)
@@ -33,17 +38,17 @@ import qualified EVM.Fetch
 import qualified EVM.Stepper
 import qualified EVM.VMTest                       as VMTest
 
-data TxTrace = TxCall
+data TraceData = TxCall
     { callTarget   :: Text
     , callSigBytes :: Text
     , callData     :: Text
-    , callTrace    :: [TxTrace]
+    , callTrace    :: [TraceData]
     }
     | TxDelegateCall
     { delegateCallTarget   :: Text
     , delegateCallSigBytes :: Text
     , delegateCallData     :: Text
-    , delegateCallTrace    :: [TxTrace]
+    , delegateCallTrace    :: [TraceData]
     }
     | TxEvent
     { eventBytes  :: Text
@@ -57,10 +62,10 @@ data TxTrace = TxCall
     }
     deriving (Generic)
 
-instance ToJSON TxTrace where
+instance ToJSON TraceData where
   toEncoding = genericToEncoding defaultOptions
 
-instance FromJSON TxTrace
+instance FromJSON TraceData
 
 decipher = hexByteString "bytes" . strip0x
 
@@ -74,7 +79,7 @@ vmFromTx url (Tx blockNum timestamp from to gas value nonce input) = do
     case isCreate
       -- Creating new contract
           of
-      True -> return $ EVM.initialContract (EVM.InitCode $ decipher input)
+      True -> return $ EVM.initialContract (EVM.InitCode $ ConcreteBuffer input)
       -- Not creating new contract, fetch it from external source
       False ->
         EVM.Fetch.fetchContractFrom (EVM.Fetch.BlockNumber blockNum) url toAddr >>= \case
@@ -86,32 +91,34 @@ vmFromTx url (Tx blockNum timestamp from to gas value nonce input) = do
     EVM.makeVm $
     EVM.VMOpts
       { EVM.vmoptContract = contract
-      , EVM.vmoptCalldata = (calldata, literal . num $ len calldata)
+      , EVM.vmoptCalldata = (calldata, litWord (num $ len calldata))
       , EVM.vmoptValue = w256lit value
       , EVM.vmoptAddress = toAddr
       , EVM.vmoptCaller = litAddr from
       , EVM.vmoptOrigin = 0
       , EVM.vmoptGas = gas
-      , EVM.vmoptGaslimit = 0xffffffff
+      , EVM.vmoptGaslimit = 0xffffffffffffffff
       , EVM.vmoptCoinbase = 0
       , EVM.vmoptNumber = blockNum
       , EVM.vmoptTimestamp = timestamp
       , EVM.vmoptBlockGaslimit = 0
       , EVM.vmoptGasprice = 0
-      , EVM.vmoptMaxCodeSize = 0xffffffff
+      , EVM.vmoptMaxCodeSize = 0xffffffffffffffff
       , EVM.vmoptDifficulty = 0
-      , EVM.vmoptSchedule = FeeSchedule.istanbul
+      , EVM.vmoptSchedule = FeeSchedule.berlin
       , EVM.vmoptChainId = 1
       , EVM.vmoptCreate = isCreate
       , EVM.vmoptStorageModel = EVM.ConcreteS
+      , EVM.vmoptTxAccessList = mempty
+      , EVM.vmoptAllowFFI = False
       }
 
 runVM :: Text -> Tx -> EVM.VM -> IO EVM.VM
 runVM url (Tx blockNum _ _ _ _ _ _ _) =
-  let fetcher = EVM.Fetch.http (EVM.Fetch.BlockNumber $ blockNum - 1) url
+  let fetcher = EVM.Fetch.http (EVM.Fetch.BlockNumber $ blockNum) url
    in execStateT (EVM.Stepper.interpret fetcher . void $ EVM.Stepper.execFully)
 
-encodeTrace :: EVM.Trace -> Maybe TxTrace
+encodeTrace :: EVM.Trace -> Maybe TraceData
 encodeTrace t =
   case view EVM.traceData t
     -- Event Emitted
@@ -141,15 +148,17 @@ encodeTrace t =
     -- Revert
     ErrorTrace e ->
       case e of
-        EVM.Revert out -> return $ TxRevert (showError out)
+        EVM.Revert out -> do
+          let ?context = DappContext emptyDapp mempty
+          return $ TxRevert (showError out)
         _              -> return $ TxReturn (pack . show $ e)
     -- Unimportant stuff
     _ -> Nothing
 
-encodeTree :: Tree EVM.Trace -> Tree (Maybe TxTrace)
+encodeTree :: Tree EVM.Trace -> Tree (Maybe TraceData)
 encodeTree (Node n ns) = (Node (encodeTrace n) (encodeTree <$> ns))
 
-formatForest :: Tree (Maybe TxTrace) -> TxTrace
+formatForest :: Tree (Maybe TraceData) -> TraceData
 formatForest (Node Nothing _) = TxReturn "0x"
 formatForest (Node (Just n) ns) =
   case n of

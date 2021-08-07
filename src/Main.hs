@@ -22,8 +22,8 @@ import           System.Console.CmdArgs               (Data, Typeable, cmdArgs,
 import           Web.Scotty                           (get, json, middleware,
                                                        param, scotty, status)
 
-import           Fetch                                (fetchTx)
-import           Trace                                (TxTrace, encodeTree,
+import           Fetch                                (Tx (..), fetchTx)
+import           Trace                                (TraceData, encodeTree,
                                                        formatForest, runVM,
                                                        vmFromTx)
 
@@ -31,7 +31,7 @@ import qualified EVM
 
 data Response = SuccessResponse
     { txHash :: Text
-    , traces :: [TxTrace]
+    , traces :: [TraceData]
     }
     | ErrorResponse
     { txHash :: Text
@@ -50,8 +50,8 @@ data EthTxdOpts = EthTxdOpts
     }
     deriving (Show, Data, Typeable)
 
-getTxTrace :: Text -> Text -> IO Response
-getTxTrace ethRpcUrl txHash = do
+getTraceData :: Text -> Text -> IO Response
+getTraceData ethRpcUrl txHash = do
   tx <- fetchTx ethRpcUrl txHash
   case tx of
     Nothing ->
@@ -60,8 +60,10 @@ getTxTrace ethRpcUrl txHash = do
         txHash
         "Unable to retrieve txHash (An achival node might fix this)."
     Just tx' -> do
-      vm <- vmFromTx ethRpcUrl tx'
-      vm' <- runVM ethRpcUrl tx' vm
+      -- Get state from previous block
+      let tx'' = tx' { _blockNum = (_blockNum tx') - 1 }
+      vm <- vmFromTx ethRpcUrl tx''
+      vm' <- runVM ethRpcUrl tx'' vm
       let traces = formatForest <$> (encodeTree <$> EVM.traceForest vm')
       return $ SuccessResponse txHash traces
 
@@ -73,7 +75,7 @@ defaultOpts =
         help
           "Ethereum RPC URL to retrieve remote state (default: http://localhost:8545)"
     } &=
-  summary "ethtxd - Lightweight Ethereum Transaction Decoder API Service v0.1.2"
+  summary "ethtxd - Lightweight Ethereum Transaction Decoder API Service v0.2.0"
 
 rpcExceptionHandler :: Text -> SomeException -> IO Response
 rpcExceptionHandler txHash _ =
@@ -90,11 +92,11 @@ main = do
       status ok200
     get "/tx/:txHash" $ do
       txHash <- param "txHash"
-      txTrace <-
+      TraceData <-
         liftIO $
-        (getTxTrace (pack $ rpc ethtxdOpts) txHash) `catch`
+        (getTraceData (pack $ rpc ethtxdOpts) txHash) `catch`
         rpcExceptionHandler txHash
-      json txTrace
-      case txTrace of
+      json TraceData
+      case TraceData of
         SuccessResponse _ _ -> status ok200
         ErrorResponse _ _   -> status status400

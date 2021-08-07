@@ -103,3 +103,18 @@ code .
 # Alternatively
 make repl # For a ghci repl
 ```
+
+## Upgrading Packages
+
+To upgrade packages, use [niv](https://github.com/nmattia/niv).
+
+```bahs
+rm nix/sources.*
+
+niv init # To update nix pkgs
+niv drop nixpkgs
+niv drop niv
+niv add nixos/nixpkgs
+niv add dapptools/dapptools
+make build
+```

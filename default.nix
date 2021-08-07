@@ -1,4 +1,4 @@
-{ compiler ? "ghc865" }:
+{ compiler ? "ghc8104" }:
 
 let
   sources = import ./nix/sources.nix;
@@ -16,6 +16,8 @@ let
     };
   };
 
+  libff = pkgs.callPackage (import ./nix/libff.nix) { };
+
   shell = myHaskellPackages.shellFor {
     packages = p: [ p.ethtxd ];
     buildInputs = with pkgs.haskellPackages; [
@@ -24,9 +26,9 @@ let
       ghcide
       stylish-haskell
       hindent
+      libff
       pkgs.jq
       pkgs.zlib
-      pkgs.glibc
       pkgs.gmp6
       pkgs.libffi
       pkgs.secp256k1
