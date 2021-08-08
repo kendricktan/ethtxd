@@ -7,6 +7,7 @@
 module Main where
 
 import           Control.Exception                    (SomeException, catch)
+import           Control.Monad                        (foldM)
 import           Control.Monad.IO.Class               (liftIO)
 import           Data.Aeson                           (FromJSON (..),
                                                        ToJSON (..),
@@ -22,7 +23,9 @@ import           System.Console.CmdArgs               (Data, Typeable, cmdArgs,
 import           Web.Scotty                           (get, json, middleware,
                                                        param, scotty, status)
 
-import           Fetch                                (Tx (..), fetchTx)
+import           Fetch                                (Tx (..),
+                                                       fetchPriorTxsInSameBlock,
+                                                       fetchTx)
 import           Trace                                (TxTrace, encodeTree,
                                                        formatForest, runVM,
                                                        vmFromTx)
@@ -52,7 +55,11 @@ data EthTxdOpts = EthTxdOpts
 
 getTxTrace :: Text -> Text -> IO Response
 getTxTrace ethRpcUrl txHash = do
+  -- Get the tx data for the current (debugging tx)
   tx <- fetchTx ethRpcUrl txHash
+  -- Get the prior transactions in the block
+  priorTxHashes <- fetchPriorTxsInSameBlock ethRpcUrl txHash
+  priorTxs <- sequence $ (fetchTx ethRpcUrl) <$> priorTxHashes
   case tx of
     Nothing ->
       return $
@@ -60,11 +67,16 @@ getTxTrace ethRpcUrl txHash = do
         txHash
         "Unable to retrieve txHash (An achival node might fix this)."
     Just tx' -> do
-      -- Get state from previous block
+      -- Tx data is the same, however the initial state
+      -- will be the state before all the other tx's
       let tx'' = tx' { _blockNum = (_blockNum tx') - 1 }
       -- Prepare the VM
-      vm <- vmFromTx ethRpcUrl tx''
-      -- Run the transaction 
+      vm <- vmFromTx ethRpcUrl $ tx''
+      -- Run all the prior txs
+      -- vm' <- foldM (\v t -> case t of
+      --   Just t' -> runVM ethRpcUrl t' v
+      --   Nothing -> return v) vm priorTxs
+      -- Finally, run the selected the transaction
       vm' <- runVM ethRpcUrl tx'' vm
       -- Get the traces
       let traces = formatForest <$> (encodeTree <$> EVM.traceForest vm')

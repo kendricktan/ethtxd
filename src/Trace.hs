@@ -148,15 +148,17 @@ encodeTrace t =
        in case target == context
         -- Call
                 of
-            True  -> return $ TxCall target' sig' data'' []
+            True  -> return $ TxCall target' sig' data'' mempty
         -- Delegate call
-            False -> return $ TxDelegateCall target' sig' data'' []
+            False -> return $ TxDelegateCall target' sig' data'' mempty
     -- Return Data
     ReturnTrace out (CallContext {}) -> Just $ TxReturn $ formatSBinary out
     -- Revert
     ErrorTrace e ->
       case e of
         EVM.Revert out -> do
+          -- Some Dapp context, but since this is a webapp
+          -- we can just construct it as an empty DappContext
           let ?context = DappContext emptyDapp mempty
           return $ TxRevert (showError out)
         _              -> return $ TxReturn (pack . show $ e)
