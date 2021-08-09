@@ -79,6 +79,3 @@ fetchTxHashesInBlock url bn = do
   return $ case blockData of
     Just x  -> parseTxHashesFromBlock x
     Nothing -> mempty
-
-
-gg = fetchPriorTxsInSameBlock "http://192.168.1.100:8544" "0xcd7dae143a4c0223349c16237ce4cd7696b1638d116a72755231ede872ab70fc"

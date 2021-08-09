@@ -9,12 +9,14 @@ module Main where
 import           Control.Exception                    (SomeException, catch)
 import           Control.Monad                        (foldM)
 import           Control.Monad.IO.Class               (liftIO)
+import           Control.Monad.Trans.State.Strict     (execStateT)
 import           Data.Aeson                           (FromJSON (..),
                                                        ToJSON (..),
                                                        defaultOptions,
                                                        genericToEncoding,
                                                        object, (.=))
 import           Data.Text                            (Text, pack)
+import           EVM.Fetch                            (BlockNumber (..), http)
 import           GHC.Generics                         (Generic (..))
 import           Network.HTTP.Types.Status            (ok200, status400)
 import           Network.Wai.Middleware.RequestLogger (logStdout)
@@ -27,8 +29,8 @@ import           Fetch                                (Tx (..),
                                                        fetchPriorTxsInSameBlock,
                                                        fetchTx)
 import           Trace                                (TxTrace, encodeTree,
-                                                       formatForest, runVM,
-                                                       vmFromTx)
+                                                       execTxs, formatForest,
+                                                       runVM, vmFromTx)
 
 import qualified EVM
 
@@ -56,29 +58,29 @@ data EthTxdOpts = EthTxdOpts
 getTxTrace :: Text -> Text -> IO Response
 getTxTrace ethRpcUrl txHash = do
   -- Get the tx data for the current (debugging tx)
-  tx <- fetchTx ethRpcUrl txHash
+  targetTx <- fetchTx ethRpcUrl txHash
   -- Get the prior transactions in the block
   priorTxHashes <- fetchPriorTxsInSameBlock ethRpcUrl txHash
   priorTxs <- sequence $ (fetchTx ethRpcUrl) <$> priorTxHashes
-  case tx of
+  case sequence $ priorTxs <> [targetTx] of
     Nothing ->
       return $
       ErrorResponse
         txHash
         "Unable to retrieve txHash (An achival node might fix this)."
-    Just tx' -> do
+    Just txs -> do
       -- Tx data is the same, however the initial state
       -- will be the state before all the other tx's
-      let tx'' = tx' { _blockNum = (_blockNum tx') - 1 }
-      -- Prepare the VM
-      vm <- vmFromTx ethRpcUrl $ tx''
-      -- Run all the prior txs
-      -- vm' <- foldM (\v t -> case t of
-      --   Just t' -> runVM ethRpcUrl t' v
-      --   Nothing -> return v) vm priorTxs
-      -- Finally, run the selected the transaction
-      vm' <- runVM ethRpcUrl tx'' vm
-      -- Get the traces
+      let firstTx  = head txs
+          firstTx' = firstTx { _blockNum = _blockNum firstTx - 1}
+          lastTx   = last txs
+          lastTx'  = lastTx { _blockNum = _blockNum firstTx - 1}
+          fetcher  = EVM.Fetch.http (EVM.Fetch.BlockNumber $ _blockNum firstTx') ethRpcUrl
+          vmSeq    = execTxs (tail txs) ethRpcUrl fetcher
+      vm <- vmFromTx ethRpcUrl lastTx'
+      -- vm' <- execStateT vmSeq vm
+      vm' <- runVM ethRpcUrl lastTx vm
+      -- -- Get the traces
       let traces = formatForest <$> (encodeTree <$> EVM.traceForest vm')
       return $ SuccessResponse txHash traces
 

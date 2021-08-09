@@ -1,26 +1,35 @@
-{-# LANGUAGE DeriveGeneric     #-}
-{-# LANGUAGE ImplicitParams    #-}
-{-# LANGUAGE LambdaCase        #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE Rank2Types        #-}
+{-# LANGUAGE DeriveGeneric      #-}
+{-# LANGUAGE ImplicitParams     #-}
+{-# LANGUAGE LambdaCase         #-}
+{-# LANGUAGE OverloadedStrings  #-}
+{-# LANGUAGE Rank2Types         #-}
+{-# LANGUAGE StandaloneDeriving #-}
+
 
 module Trace where
 
-import           EVM                              (FrameContext (..), Log (..),
-                                                   TraceData (..))
+import           EVM                              (Env (..), FrameContext (..),
+                                                   Log (..), TraceData (..),
+                                                   VM (..))
 import           EVM.Concrete                     (createAddress)
 import           EVM.Dapp                         (DappContext (..), emptyDapp)
 import           EVM.Format                       (formatSBinary, showError)
 import           EVM.Symbolic                     (len, litAddr, litWord)
-import           EVM.Transaction                  (txAccessMap)
-import           EVM.Types                        (Buffer (ConcreteBuffer),
-                                                   SymWord (..), hexByteString,
-                                                   num, strip0x, w256lit)
+import           EVM.Transaction                  (Transaction (..),
+                                                   txAccessMap)
+import           EVM.Types                        (Buffer (..), SymWord (..),
+                                                   hexByteString, num, strip0x,
+                                                   w256lit)
+
 import           Numeric                          (showHex)
 
-import           Control.Lens.Combinators         (view)
+import           Control.Lens.Combinators         (assign, view)
+
 import           Control.Monad                    (void)
-import           Control.Monad.Trans.State.Strict (execStateT)
+import           Control.Monad.IO.Class           (liftIO)
+import           Control.Monad.Trans.State.Strict (StateT (..), execStateT, get,
+                                                   put)
+
 import           Data.Aeson                       (FromJSON (..), ToJSON (..),
                                                    defaultOptions,
                                                    genericToEncoding)
@@ -31,13 +40,18 @@ import           Data.Tree                        (Tree (..))
 import           Fetch                            (Tx (..))
 import           GHC.Generics                     (Generic)
 
+import qualified Data.Map                         as Map
+
 import qualified Data.Text                        as T
+import qualified Data.Tree.Zipper                 as Zipper
+
 
 import qualified EVM
 import qualified EVM.FeeSchedule                  as FeeSchedule
 import qualified EVM.Fetch
 import qualified EVM.Stepper
 import qualified EVM.VMTest                       as VMTest
+
 
 data TxTrace = TxCall
     { callTarget   :: Text
@@ -120,6 +134,35 @@ vmFromTx url (Tx blockNum timestamp from to gas value nonce input) = do
       , EVM.vmoptTxAccessList = mempty
       , EVM.vmoptAllowFFI = False
       }
+
+
+
+execTxs :: [Tx] -> Text -> EVM.Fetch.Fetcher -> StateT EVM.VM IO (Either EVM.Error Buffer)
+execTxs [] _ fetcher = EVM.Stepper.interpret fetcher $ EVM.Stepper.execFully
+execTxs (x:xs) url fetcher = do
+  -- Inteprets previous transaction
+  EVM.Stepper.interpret fetcher $ EVM.Stepper.execFully
+  -- Loads new tx into it
+  -- Resets previous tx state, stack frames, and result
+  -- Prepares VM for tx
+  vm <- get
+  -- Get new VM with tx state loaded into it
+  newVM <- liftIO $ vmFromTx url x
+  -- But keep existing contract storage state
+  let env1  = _env vm
+      env2  = _env newVM
+      newEnv = env1 { _contracts = Map.union (_contracts env1) (_contracts env2)}
+  -- Reset VM state, trace, but keep the state
+  put vm {
+      _result = Nothing
+    , _frames = []
+    , _traces = Zipper.fromForest []
+    , _state = EVM.blankState
+    , _env = newEnv
+  }
+  -- Executes next state
+  execTxs xs url fetcher
+
 
 runVM :: Text -> Tx -> EVM.VM -> IO EVM.VM
 runVM url (Tx blockNum _ _ _ _ _ _ _) =
