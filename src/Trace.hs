@@ -157,16 +157,18 @@ execTxs (x:xs) url fetcher = do
       _result = Nothing
     , _frames = []
     , _traces = Zipper.fromForest []
-    , _state = EVM.blankState
+    , _state = _state newVM
+    , _block = _block newVM
+    , _tx = _tx newVM
     , _env = newEnv
   }
   -- Executes next state
   execTxs xs url fetcher
 
 
-runVM :: Text -> Tx -> EVM.VM -> IO EVM.VM
-runVM url (Tx blockNum _ _ _ _ _ _ _) =
-  let fetcher = EVM.Fetch.http (EVM.Fetch.BlockNumber $ blockNum) url
+runVM :: Text -> EVM.Fetch.BlockNumber -> EVM.VM -> IO EVM.VM
+runVM url blockNum =
+  let fetcher = EVM.Fetch.http blockNum url
    in execStateT (EVM.Stepper.interpret fetcher . void $ EVM.Stepper.execFully)
 
 encodeTrace :: EVM.Trace -> Maybe TxTrace

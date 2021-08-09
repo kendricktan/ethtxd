@@ -7,7 +7,7 @@
 module Main where
 
 import           Control.Exception                    (SomeException, catch)
-import           Control.Monad                        (foldM)
+import           Control.Monad                        (foldM, void)
 import           Control.Monad.IO.Class               (liftIO)
 import           Control.Monad.Trans.State.Strict     (execStateT)
 import           Data.Aeson                           (FromJSON (..),
@@ -17,6 +17,7 @@ import           Data.Aeson                           (FromJSON (..),
                                                        object, (.=))
 import           Data.Text                            (Text, pack)
 import           EVM.Fetch                            (BlockNumber (..), http)
+import           EVM.Stepper                          (execFully, interpret)
 import           GHC.Generics                         (Generic (..))
 import           Network.HTTP.Types.Status            (ok200, status400)
 import           Network.Wai.Middleware.RequestLogger (logStdout)
@@ -72,14 +73,17 @@ getTxTrace ethRpcUrl txHash = do
       -- Tx data is the same, however the initial state
       -- will be the state before all the other tx's
       let firstTx  = head txs
-          firstTx' = firstTx { _blockNum = _blockNum firstTx - 1}
           lastTx   = last txs
-          lastTx'  = lastTx { _blockNum = _blockNum firstTx - 1}
-          fetcher  = EVM.Fetch.http (EVM.Fetch.BlockNumber $ _blockNum firstTx') ethRpcUrl
+          blockNo  = EVM.Fetch.BlockNumber $ _blockNum lastTx - 1
+          fetcher  = EVM.Fetch.http blockNo ethRpcUrl
           vmSeq    = execTxs (tail txs) ethRpcUrl fetcher
-      vm <- vmFromTx ethRpcUrl lastTx'
-      -- vm' <- execStateT vmSeq vm
-      vm' <- runVM ethRpcUrl lastTx vm
+      -- Prepare VM for first Tx
+      vm  <- vmFromTx ethRpcUrl firstTx
+      -- Execute rest of the tx
+      vm' <- execStateT
+              (execTxs (tail txs) ethRpcUrl fetcher)
+              vm
+      -- vm' <- runVM ethRpcUrl blockNo vm
       -- -- Get the traces
       let traces = formatForest <$> (encodeTree <$> EVM.traceForest vm')
       return $ SuccessResponse txHash traces
