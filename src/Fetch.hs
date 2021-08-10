@@ -10,12 +10,12 @@ import           Data.Aeson.Lens          (AsValue, key, values, _String)
 import           Data.ByteString          (ByteString)
 import           Data.Text                (Text (..), pack)
 import           Data.Text.Encoding       (encodeUtf8)
+import qualified EVM                      as EVM
 import           EVM.Fetch                (BlockNumber (..), fetchBlockFrom,
                                            fetchWithSession, readText, rpc,
                                            toRPC)
+import           EVM.Transaction          (Transaction)
 import           EVM.Types                (Addr, SymWord, W256)
-
-import qualified EVM                      as EVM
 import qualified Network.Wreq.Session     as Session
 
 data Tx = Tx

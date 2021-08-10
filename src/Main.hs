@@ -38,7 +38,7 @@ import qualified EVM
 
 data Response = SuccessResponse
     { txHash :: Text
-    , traces :: TxTrace
+    , trace  :: TxTrace
     }
     | ErrorResponse
     { txHash :: Text

@@ -197,7 +197,11 @@ encodeTx (Tx blockNum timestamp from to gas value nonce input) =
   let toAddr = fromMaybe (createAddress from nonce) to
       isCreate = isNothing to
       calldata = ConcreteBuffer $ decipher input
-  in FrameTrace $ CallContext toAddr from 0 0 0 Nothing calldata Map.empty (EVM.SubState mempty mempty mempty mempty mempty)
+      emptySubstrate = EVM.SubState mempty mempty mempty mempty mempty
+  in if isCreate 
+    then FrameTrace $ CreationContext toAddr 0 Map.empty emptySubstrate
+    -- Context is the address itself to simulate a "call"
+    else FrameTrace $ CallContext toAddr toAddr 0 0 0 Nothing calldata Map.empty emptySubstrate
 
 encodeTree :: Tree EVM.Trace -> Tree TraceData
 encodeTree (Node n ns) = (Node (_traceData n) (encodeTree <$> ns))
