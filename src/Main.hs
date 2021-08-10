@@ -26,18 +26,19 @@ import           System.Console.CmdArgs               (Data, Typeable, cmdArgs,
 import           Web.Scotty                           (get, json, middleware,
                                                        param, scotty, status)
 
+import           Data.Tree                            (Forest (..))
+import           EVM                                  (Trace (..),
+                                                       TraceData (..))
 import           Fetch                                (Tx (..),
                                                        fetchPriorTxsInSameBlock,
                                                        fetchTx)
-import           Trace                                (TxTrace, encodeTree,
-                                                       execTxs, formatForest,
-                                                       runVM, vmFromTx)
+import           Trace                                (TxTrace(..), encodeTx, encodeTrace, encodeTree, execTxs, runVM, vmFromTx)
 
 import qualified EVM
 
 data Response = SuccessResponse
     { txHash :: Text
-    , traces :: [TxTrace]
+    , traces :: TxTrace
     }
     | ErrorResponse
     { txHash :: Text
@@ -83,10 +84,10 @@ getTxTrace ethRpcUrl txHash = do
       vm' <- execStateT
               (execTxs (tail txs) ethRpcUrl fetcher)
               vm
-      -- vm' <- runVM ethRpcUrl blockNo vm
-      -- -- Get the traces
-      let traces = formatForest <$> (encodeTree <$> EVM.traceForest vm')
-      return $ SuccessResponse txHash traces
+      -- Get the traces
+      let txTrace = (encodeTrace . encodeTree) <$> EVM.traceForest vm'
+          txTrace' = TxTrace (encodeTx lastTx) txTrace
+      return $ SuccessResponse txHash txTrace'
 
 defaultOpts =
   EthTxdOpts

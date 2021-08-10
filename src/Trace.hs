@@ -1,4 +1,9 @@
+{-# LANGUAGE DataKinds          #-}
+{-# LANGUAGE DeriveAnyClass     #-}
+
 {-# LANGUAGE DeriveGeneric      #-}
+{-# LANGUAGE FlexibleInstances  #-}
+
 {-# LANGUAGE ImplicitParams     #-}
 {-# LANGUAGE LambdaCase         #-}
 {-# LANGUAGE OverloadedStrings  #-}
@@ -6,11 +11,12 @@
 {-# LANGUAGE StandaloneDeriving #-}
 
 
+
 module Trace where
 
 import           EVM                              (Env (..), FrameContext (..),
-                                                   Log (..), TraceData (..),
-                                                   VM (..))
+                                                   Log (..), Trace (..),
+                                                   TraceData (..), VM (..))
 import           EVM.Concrete                     (createAddress)
 import           EVM.Dapp                         (DappContext (..), emptyDapp)
 import           EVM.Format                       (formatSBinary, showError)
@@ -31,15 +37,20 @@ import           Control.Monad.Trans.State.Strict (StateT (..), execStateT, get,
                                                    put)
 
 import           Data.Aeson                       (FromJSON (..), ToJSON (..),
-                                                   defaultOptions,
-                                                   genericToEncoding)
+                                                   Value (..), defaultOptions,
+                                                   genericToEncoding, object,
+                                                   (.=))
 import           Data.Maybe                       (fromMaybe, isNothing)
-import           Data.SBV                         (literal, unliteral)
+import           Data.SBV                         (WordN (..), literal,
+                                                   unliteral)
+
 import           Data.Text                        (Text, pack, unpack)
-import           Data.Tree                        (Tree (..))
+import           Data.Tree                        (Forest (..), Tree (..))
 import           Fetch                            (Tx (..))
 import           GHC.Generics                     (Generic)
 
+import qualified Data.HashMap.Lazy                as HML
+import qualified Data.HashMap.Strict              as HM
 import qualified Data.Map                         as Map
 
 import qualified Data.Text                        as T
@@ -52,37 +63,20 @@ import qualified EVM.Fetch
 import qualified EVM.Stepper
 import qualified EVM.VMTest                       as VMTest
 
+mergeA :: [Value] -> Value
+mergeA = Object . HML.unions . map (\(Object x) -> x)
 
-data TxTrace = TxCall
-    { callTarget   :: Text
-    , callSigBytes :: Text
-    , callData     :: Text
-    , callTrace    :: [TxTrace]
-    }
-    | TxDelegateCall
-    { delegateCallTarget   :: Text
-    , delegateCallSigBytes :: Text
-    , delegateCallData     :: Text
-    , delegateCallTrace    :: [TxTrace]
-    }
-    | TxEvent
-    { eventBytes  :: Text
-    , eventTopics :: [Text]
-    }
-    | TxReturn
-    { returnData :: Text
-    }
-    | TxRevert
-    { revertReason :: Text
-    }
-    deriving (Generic)
+-- | Custom Data
+data TxTrace = TxTrace TraceData [TxTrace] deriving (Generic, Show)
 
 instance ToJSON TxTrace where
-  toEncoding = genericToEncoding defaultOptions
+  toJSON (TxTrace x []) = toJSON x
+  toJSON (TxTrace x xs) =
+    let a = toJSON x
+        b = object ["internal" .= toJSON xs]
+    in mergeA [a, b]
 
-instance FromJSON TxTrace
-
-decipher = hexByteString "bytes" . strip0x
+deriving instance FromJSON TxTrace
 
 -- | Symbolic words of 256 bits, don't show the
 --   "insightful" information
@@ -90,6 +84,36 @@ showEvalSymWord :: SymWord -> String
 showEvalSymWord (S _ s) = case unliteral s of
   Just x  -> ("0x" ++) $ showHex x ""
   Nothing -> "0x"
+
+decipher = hexByteString "bytes" . strip0x
+
+instance ToJSON TraceData where
+  toJSON (EventTrace (Log addr b t)) = object [
+      "type" .= String "event"
+    , "address" .= show addr
+    , "bytes" .= formatSBinary b
+    , "data" .= map (pack . showEvalSymWord) t ]
+
+  toJSON (FrameTrace (CreationContext addr _ _ _)) = object ["type" .= String "create" , "address" .= show addr]
+  toJSON (FrameTrace (CallContext target context _ _ _ _ calldata _ _)) =
+    let target' = show target
+        calldata' = formatSBinary calldata
+        fType = if target == context
+          then "call"
+          else "delegateCall"
+    in object [
+        "type" .= String fType
+      , "address" .= target'
+      , "calldata" .= calldata'
+    ]
+
+  toJSON (ErrorTrace e)    = object ["type" .= String "error", "value" .= show e]
+  toJSON (ReturnTrace b _) = object ["type" .= String "return", "value" .= formatSBinary b]
+  toJSON _ = Null
+
+instance FromJSON TraceData where
+  parseJSON = error "Not implemented"
+
 
 vmFromTx :: Text -> Tx -> IO (EVM.VM)
 vmFromTx url (Tx blockNum timestamp from to gas value nonce input) = do
@@ -135,8 +159,6 @@ vmFromTx url (Tx blockNum timestamp from to gas value nonce input) = do
       , EVM.vmoptAllowFFI = False
       }
 
-
-
 execTxs :: [Tx] -> Text -> EVM.Fetch.Fetcher -> StateT EVM.VM IO (Either EVM.Error Buffer)
 execTxs [] _ fetcher = EVM.Stepper.interpret fetcher $ EVM.Stepper.execFully
 execTxs (x:xs) url fetcher = do
@@ -165,58 +187,20 @@ execTxs (x:xs) url fetcher = do
   -- Executes next state
   execTxs xs url fetcher
 
-
 runVM :: Text -> EVM.Fetch.BlockNumber -> EVM.VM -> IO EVM.VM
 runVM url blockNum =
   let fetcher = EVM.Fetch.http blockNum url
    in execStateT (EVM.Stepper.interpret fetcher . void $ EVM.Stepper.execFully)
 
-encodeTrace :: EVM.Trace -> Maybe TxTrace
-encodeTrace t =
-  case view EVM.traceData t
-    -- Event Emitted
-        of
-    EventTrace (Log _ bytes topics) ->
-      let topics' = (map (pack . showEvalSymWord) topics)
-          bytes' = formatSBinary bytes
-       in Just $ TxEvent bytes' topics'
-    -- Contract call
-    FrameTrace (CallContext target context _ _ _ _ calldata _ _) ->
-      let target' = pack (show target)
-          calldata' = unpack $ formatSBinary calldata
-          sig' = pack $ take 10 calldata'
-          data' = pack $ drop 10 calldata'
-          data'' =
-            if T.length data' > 0
-              then "0x" <> data'
-              else data'
-       in case target == context
-        -- Call
-                of
-            True  -> return $ TxCall target' sig' data'' mempty
-        -- Delegate call
-            False -> return $ TxDelegateCall target' sig' data'' mempty
-    -- Return Data
-    ReturnTrace out (CallContext {}) -> Just $ TxReturn $ formatSBinary out
-    -- Revert
-    ErrorTrace e ->
-      case e of
-        EVM.Revert out -> do
-          -- Some Dapp context, but since this is a webapp
-          -- we can just construct it as an empty DappContext
-          let ?context = DappContext emptyDapp mempty
-          return $ TxRevert (showError out)
-        _              -> return $ TxReturn (pack . show $ e)
-    -- Unimportant stuff
-    _ -> Nothing
+encodeTx :: Tx -> TraceData
+encodeTx (Tx blockNum timestamp from to gas value nonce input) =
+  let toAddr = fromMaybe (createAddress from nonce) to
+      isCreate = isNothing to
+      calldata = ConcreteBuffer $ decipher input
+  in FrameTrace $ CallContext toAddr from 0 0 0 Nothing calldata Map.empty (EVM.SubState mempty mempty mempty mempty mempty)
 
-encodeTree :: Tree EVM.Trace -> Tree (Maybe TxTrace)
-encodeTree (Node n ns) = (Node (encodeTrace n) (encodeTree <$> ns))
+encodeTree :: Tree EVM.Trace -> Tree TraceData
+encodeTree (Node n ns) = (Node (_traceData n) (encodeTree <$> ns))
 
-formatForest :: Tree (Maybe TxTrace) -> TxTrace
-formatForest (Node Nothing _) = TxReturn "0x"
-formatForest (Node (Just n) ns) =
-  case n of
-    TxCall _ _ _ _         -> n {callTrace = formatForest <$> ns}
-    TxDelegateCall _ _ _ _ -> n {delegateCallTrace = formatForest <$> ns}
-    _                      -> n
+encodeTrace :: Tree TraceData -> TxTrace
+encodeTrace (Node s ns) = TxTrace s $ encodeTrace <$> ns
