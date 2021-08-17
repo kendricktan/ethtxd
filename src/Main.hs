@@ -15,26 +15,48 @@ import           Data.Aeson                           (FromJSON (..),
                                                        defaultOptions,
                                                        genericToEncoding,
                                                        object, (.=))
+import           Data.ByteString                      (ByteString)
+import           Data.Map.Strict                      (Map (..), fromList,
+                                                       mapKeys, mapWithKey,
+                                                       toList)
+import           Data.Maybe                           (fromMaybe)
 import           Data.Text                            (Text, pack)
-import           EVM.Fetch                            (BlockNumber (..), http)
+import           Data.Text.Encoding                   (encodeUtf8)
+import           EVM.Fetch                            (BlockNumber (..),
+                                                       fetchContractWithSession,
+                                                       http)
 import           EVM.Stepper                          (execFully, interpret)
 import           GHC.Generics                         (Generic (..))
 import           Network.HTTP.Types.Status            (ok200, status400)
 import           Network.Wai.Middleware.RequestLogger (logStdout)
 import           System.Console.CmdArgs               (Data, Typeable, cmdArgs,
                                                        help, summary, (&=))
-import           Web.Scotty                           (get, json, middleware,
-                                                       param, scotty, status)
+import           Web.Scotty                           (ActionM (..), get, json,
+                                                       jsonData, middleware,
+                                                       param, post, scotty,
+                                                       status)
 
 import           Data.Tree                            (Forest (..))
-import           EVM                                  (Trace (..),
-                                                       TraceData (..))
+import           EVM                                  (Contract (..),
+                                                       ContractCode (..),
+                                                       Env (..), Trace (..),
+                                                       TraceData (..), VM (..),
+                                                       initialContract)
+import           EVM.Fetch                            (readText)
+import           EVM.Types                            (Addr, Buffer (..),
+                                                       hexByteString, strip0x)
 import           Fetch                                (Tx (..),
                                                        fetchPriorTxsInSameBlock,
                                                        fetchTx)
-import           Trace                                (TxTrace(..), encodeTx, encodeTrace, encodeTree, execTxs, runVM, vmFromTx)
+import           Trace                                (TxTrace (..), decipher,
+                                                       encodeTrace, encodeTree,
+                                                       encodeTx, execTxs, runVM,
+                                                       setVmContractCode,
+                                                       vmFromTx)
 
+import qualified Data.Map.Strict                      as MS
 import qualified EVM
+import qualified Network.Wreq.Session                 as Session
 
 data Response = SuccessResponse
     { txHash :: Text
@@ -51,14 +73,23 @@ instance FromJSON Response
 instance ToJSON Response where
   toEncoding = genericToEncoding defaultOptions
 
+data Request = Request {
+  code :: Map Text Text -- Hashmap of Key: Address, Value: ByteString
+} deriving (Generic)
+
+instance FromJSON Request
+
+instance ToJSON Request where
+  toEncoding = genericToEncoding defaultOptions
+
 data EthTxdOpts = EthTxdOpts
     { port :: Int
     , rpc  :: String
     }
     deriving (Show, Data, Typeable)
 
-getTxTrace :: Text -> Text -> IO Response
-getTxTrace ethRpcUrl txHash = do
+getTxTrace :: Map Addr Buffer -> Text -> Text -> IO Response
+getTxTrace m ethRpcUrl txHash = do
   -- Get the tx data for the current (debugging tx)
   targetTx <- fetchTx ethRpcUrl txHash
   -- Get the prior transactions in the block
@@ -77,13 +108,37 @@ getTxTrace ethRpcUrl txHash = do
           lastTx   = last txs
           blockNo  = EVM.Fetch.BlockNumber $ _blockNum lastTx - 1
           fetcher  = EVM.Fetch.http blockNo ethRpcUrl
-          vmSeq    = execTxs (tail txs) ethRpcUrl fetcher
+      -- Prepare the contract env
+      m' <- sequence $ (\(k, a) -> do
+                                    c <- Session.newAPISession >>= (fetchContractWithSession blockNo ethRpcUrl k)
+                                    let cc = (EVM.RuntimeCode a)
+                                    let ic = initialContract cc
+                                    case c of
+                                      -- Grab the existing nonce and balance
+                                      Just c' -> return (k, ic
+                                                            { _balance = _balance c'
+                                                            , EVM._nonce = EVM._nonce c'
+                                                            , _external = True
+                                                            })
+                                      -- Otherwise just create initial contract
+                                      Nothing -> return (k, ic)
+                        ) <$> toList m
+      let m'' = fromList m'
       -- Prepare VM for first Tx
-      vm  <- vmFromTx ethRpcUrl firstTx
+      vm <- vmFromTx ethRpcUrl firstTx
       -- Execute rest of the tx
       vm' <- execStateT
-              (execTxs (tail txs) ethRpcUrl fetcher)
-              vm
+              (execTxs (tail txs) m'' ethRpcUrl fetcher)
+              -- But overwrite specific contract code
+              (setVmContractCode m'' vm)
+      -- GG
+      -- liftIO $ case (MS.lookup (readText "0x6b175474e89094c44da98b954eedeac495271d0f" :: Addr) $ _contracts $ _env (setVmContractCode m'' vm)) of
+      --             Just x -> print $ _contractcode x
+      --             Nothing -> print "Not found!"
+      -- -- Get contract code
+      -- liftIO $ case (MS.lookup (readText "0x6b175474e89094c44da98b954eedeac495271d0f" :: Addr) $ _contracts $ _env vm') of
+      --             Just x -> print $ _contractcode x
+      --             Nothing -> print "Not found!"
       -- Get the traces
       let txTrace = (encodeTrace . encodeTree) <$> EVM.traceForest vm'
           txTrace' = TxTrace (encodeTx lastTx) txTrace
@@ -100,23 +155,27 @@ defaultOpts =
   summary "ethtxd - Lightweight Ethereum Transaction Decoder API Service v0.2.0"
 
 rpcExceptionHandler :: Text -> SomeException -> IO Response
-rpcExceptionHandler txHash _ =
-  return $ ErrorResponse txHash "Unable to connect to RPC Node or state is stale (might need archival node)."
+rpcExceptionHandler txHash e =
+  return $ ErrorResponse txHash $ (pack . show) e --"Unable to connect to RPC Node or state is stale (might need archival node)."
 
 main :: IO ()
 main = do
   ethtxdOpts <- cmdArgs defaultOpts
   putStrLn $ "Ethereum RPC URL: " <> rpc ethtxdOpts
+
   scotty (port ethtxdOpts) $ do
     middleware logStdout
     get "/" $ do
       json $ object [("status" :: Text) .= ("ok" :: Text)]
       status ok200
-    get "/tx/:txHash" $ do
+    post "/tx/:txHash" $ do
       txHash <- param "txHash"
+      contractsCode <- jsonData :: ActionM Request
+      let contractsCode'  = mapKeys (readText :: Text -> Addr) $ code contractsCode
+          contractsCode'' = (\a -> (ConcreteBuffer $ decipher $ encodeUtf8 a)) <$> contractsCode'
       trace <-
         liftIO $
-        (getTxTrace (pack $ rpc ethtxdOpts) txHash) `catch`
+        (getTxTrace contractsCode'' (pack $ rpc ethtxdOpts) txHash) `catch`
         rpcExceptionHandler txHash
       json trace
       case trace of

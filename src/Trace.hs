@@ -14,18 +14,24 @@
 
 module Trace where
 
-import           EVM                              (Env (..), FrameContext (..),
-                                                   Log (..), Trace (..),
-                                                   TraceData (..), VM (..))
+import           Data.ByteString                  (ByteString)
+import           Data.Map.Strict                  (Map (..), union)
+import           EVM                              (Contract (..),
+                                                   ContractCode (..), Env (..),
+                                                   FrameContext (..),
+                                                   FrameState (..), Log (..),
+                                                   Trace (..), TraceData (..),
+                                                   TxState (..), VM (..),
+                                                   initialContract)
 import           EVM.Concrete                     (createAddress)
 import           EVM.Dapp                         (DappContext (..), emptyDapp)
 import           EVM.Format                       (formatSBinary, showError)
 import           EVM.Symbolic                     (len, litAddr, litWord)
 import           EVM.Transaction                  (Transaction (..),
                                                    txAccessMap)
-import           EVM.Types                        (Buffer (..), SymWord (..),
-                                                   hexByteString, num, strip0x,
-                                                   w256lit)
+import           EVM.Types                        (Addr, Buffer (..),
+                                                   SymWord (..), hexByteString,
+                                                   num, strip0x, w256lit)
 
 import           Numeric                          (showHex)
 
@@ -114,6 +120,22 @@ instance ToJSON TraceData where
 instance FromJSON TraceData where
   parseJSON = error "Not implemented"
 
+setVmContractCode :: Map Addr Contract -> EVM.VM -> EVM.VM
+setVmContractCode c vm = let
+  env = _env vm
+  env' = env { _contracts = union c (_contracts env) }
+  tx = _tx vm
+  tx' = tx { _txReversion = union c (_txReversion tx)}
+  state = _state vm
+  toAddr = _contract state
+  code = _code state
+  code' = case Map.lookup toAddr c of
+    Just c  -> case _contractcode c of
+      InitCode b    -> b
+      RuntimeCode b -> b
+    Nothing -> code
+  state' = state { _code = code' }
+  in vm { _tx = tx', _env = env', _state = state' }
 
 vmFromTx :: Text -> Tx -> IO (EVM.VM)
 vmFromTx url (Tx blockNum timestamp from to gas value nonce input) = do
@@ -159,9 +181,9 @@ vmFromTx url (Tx blockNum timestamp from to gas value nonce input) = do
       , EVM.vmoptAllowFFI = False
       }
 
-execTxs :: [Tx] -> Text -> EVM.Fetch.Fetcher -> StateT EVM.VM IO (Either EVM.Error Buffer)
-execTxs [] _ fetcher = EVM.Stepper.interpret fetcher $ EVM.Stepper.execFully
-execTxs (x:xs) url fetcher = do
+execTxs :: [Tx] -> Map Addr Contract -> Text -> EVM.Fetch.Fetcher -> StateT EVM.VM IO (Either EVM.Error Buffer)
+execTxs [] _ _ fetcher = EVM.Stepper.interpret fetcher $ EVM.Stepper.execFully
+execTxs (x:xs) m url fetcher = do
   -- Inteprets previous transaction
   EVM.Stepper.interpret fetcher $ EVM.Stepper.execFully
   -- Loads new tx into it
@@ -169,7 +191,7 @@ execTxs (x:xs) url fetcher = do
   -- Prepares VM for tx
   vm <- get
   -- Get new VM with tx state loaded into it
-  newVM <- liftIO $ vmFromTx url x
+  newVM <- liftIO $ setVmContractCode m <$> vmFromTx url x
   -- But keep existing contract storage state
   let env1  = _env vm
       env2  = _env newVM
@@ -185,7 +207,7 @@ execTxs (x:xs) url fetcher = do
     , _env = newEnv
   }
   -- Executes next state
-  execTxs xs url fetcher
+  execTxs xs m url fetcher
 
 runVM :: Text -> EVM.Fetch.BlockNumber -> EVM.VM -> IO EVM.VM
 runVM url blockNum =
@@ -198,7 +220,7 @@ encodeTx (Tx blockNum timestamp from to gas value nonce input) =
       isCreate = isNothing to
       calldata = ConcreteBuffer $ decipher input
       emptySubstrate = EVM.SubState mempty mempty mempty mempty mempty
-  in if isCreate 
+  in if isCreate
     then FrameTrace $ CreationContext toAddr 0 Map.empty emptySubstrate
     -- Context is the address itself to simulate a "call"
     else FrameTrace $ CallContext toAddr toAddr 0 0 0 Nothing calldata Map.empty emptySubstrate
